@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HFR Analysis</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 20px; }
+  h1 { text-align: center; margin-bottom: 20px; color: #a0c4ff; }
+  .container { max-width: 1100px; margin: 0 auto; }
+
+  /* Drop zone */
+  .drop-zone {
+    border: 2px dashed #555; border-radius: 12px; padding: 40px; text-align: center;
+    cursor: pointer; transition: border-color 0.2s, background 0.2s; margin-bottom: 16px;
+    background: #16213e;
+  }
+  .drop-zone.dragover { border-color: #a0c4ff; background: #1a2744; }
+  .drop-zone p { font-size: 1.1em; color: #aaa; }
+  .drop-zone input[type="file"] { display: none; }
+
+  /* Controls */
+  .controls { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  .controls label { font-weight: 600; }
+  .controls input[type="range"] { width: 160px; }
+  .controls .sigma-val { min-width: 2em; text-align: center; color: #a0c4ff; font-weight: bold; }
+  .controls button {
+    padding: 8px 24px; background: #0f3460; color: #fff; border: none; border-radius: 6px;
+    font-size: 1em; cursor: pointer; transition: background 0.2s;
+  }
+  .controls button:hover { background: #1a5276; }
+  .controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .controls .checkbox-group { display: flex; align-items: center; gap: 6px; }
+  .controls .checkbox-group input[type="checkbox"] { width: 16px; height: 16px; accent-color: #a0c4ff; }
+  .sigma-help { color: #999; font-size: 0.85em; margin: -8px 0 16px; line-height: 1.5; max-width: 720px; }
+
+  /* Status */
+  .status { margin-bottom: 16px; color: #aaa; font-style: italic; min-height: 1.4em; }
+
+  /* Results layout */
+  .results { display: none; }
+  .results.visible { display: block; }
+
+  /* Summary stats */
+  .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .stat-card {
+    background: #16213e; border-radius: 8px; padding: 14px; text-align: center;
+  }
+  .stat-card .label { font-size: 0.85em; color: #888; margin-bottom: 4px; }
+  .stat-card .value { font-size: 1.4em; font-weight: bold; color: #a0c4ff; }
+
+  /* Zone table */
+  .section-title { font-size: 1.1em; font-weight: 600; margin: 20px 0 10px; color: #ccc; }
+  .zone-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; max-width: 500px; margin-bottom: 12px;
+  }
+  .zone-cell {
+    background: #16213e; border-radius: 6px; padding: 10px; text-align: center; font-size: 0.85em;
+  }
+  .zone-cell .zone-label { font-weight: bold; color: #ccc; margin-bottom: 4px; }
+  .zone-cell .zone-hfr { font-size: 1.2em; color: #a0c4ff; }
+  .zone-cell .zone-detail { color: #888; font-size: 0.8em; }
+
+  /* Tilt info */
+  .tilt-info { margin-bottom: 20px; }
+  .tilt-info span { margin-right: 24px; }
+  .tilt-info .warn { color: #e6a23c; }
+
+  /* Overlay image */
+  .overlay-section { margin-bottom: 20px; }
+  .overlay-section img { max-width: 100%; border-radius: 8px; border: 1px solid #333; }
+
+  /* Star table */
+  .star-table-wrapper { max-height: 400px; overflow-y: auto; border-radius: 8px; border: 1px solid #333; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+  th { position: sticky; top: 0; background: #0f3460; padding: 8px 6px; text-align: right; color: #ddd; }
+  td { padding: 6px; text-align: right; border-bottom: 1px solid #222; }
+  tr:hover td { background: #1a2744; }
+  th:first-child, td:first-child { text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>HFR Analysis</h1>
+
+  <div class="drop-zone" id="dropZone">
+    <p>Drop a FITS file here or click to select</p>
+    <input type="file" id="fileInput" accept=".fits,.fit,.fts">
+  </div>
+
+  <div class="controls">
+    <label for="sigma">Sigma:</label>
+    <input type="range" id="sigma" min="1" max="10" step="0.5" value="5">
+    <span class="sigma-val" id="sigmaVal">5</span>
+    <span class="checkbox-group">
+      <input type="checkbox" id="debayer">
+      <label for="debayer">Debayer (RGGB)</label>
+    </span>
+    <button id="analyzeBtn" disabled>Analyze</button>
+    <span id="fileName" style="color:#888;"></span>
+  </div>
+  <p class="sigma-help">Sigma controls how bright a pixel must be to count as a star. The algorithm measures the image's background level and noise, then only picks pixels brighter than <b>background + sigma &times; noise</b>. Lower values (2-3) detect fainter stars but risk picking up noise. Higher values (7-10) only keep the brightest, most obvious stars. A value of 5 is a good starting point for most images. Enable <b>Debayer (RGGB)</b> for raw one-shot-color (OSC) camera images that have not been debayered — this converts the RGGB Bayer mosaic into a luminance channel before analysis, giving cleaner HFR/FWHM measurements.</p>
+
+  <div class="status" id="status"></div>
+
+  <div class="results" id="results">
+    <div class="summary" id="summary"></div>
+
+    <div class="section-title">Field Analysis (3x3 zones)</div>
+    <div class="zone-grid" id="zoneGrid"></div>
+    <div class="tilt-info" id="tiltInfo"></div>
+
+    <div class="overlay-section">
+      <div class="section-title">Tilt Overlay</div>
+      <img id="overlayImg" alt="Tilt overlay">
+    </div>
+
+    <div class="section-title">Detected Stars</div>
+    <div class="star-table-wrapper">
+      <table>
+        <thead>
+          <tr><th>#</th><th>X</th><th>Y</th><th>Peak</th><th>Flux</th><th>HFR</th><th>FWHM</th><th>Round</th><th>Ecc</th></tr>
+        </thead>
+        <tbody id="starBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="wasm_exec.js"></script>
+<script>
+(async function() {
+  // Load WASM
+  const go = new Go();
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = 'Loading WASM module...';
+
+  let wasmResult;
+  try {
+    wasmResult = await WebAssembly.instantiateStreaming(fetch('hfr.wasm'), go.importObject);
+  } catch (e) {
+    // Fallback for servers that don't serve .wasm with correct MIME type
+    const resp = await fetch('hfr.wasm');
+    const bytes = await resp.arrayBuffer();
+    wasmResult = await WebAssembly.instantiate(bytes, go.importObject);
+  }
+  go.run(wasmResult.instance);
+  statusEl.textContent = 'Ready. Drop a FITS file to begin.';
+
+  // Elements
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  const sigmaSlider = document.getElementById('sigma');
+  const sigmaVal = document.getElementById('sigmaVal');
+  const analyzeBtn = document.getElementById('analyzeBtn');
+  const fileNameEl = document.getElementById('fileName');
+  const resultsEl = document.getElementById('results');
+
+  let fileBytes = null;
+
+  // Sigma slider
+  sigmaSlider.addEventListener('input', () => { sigmaVal.textContent = sigmaSlider.value; });
+
+  // Drag and drop
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) loadFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => { if (fileInput.files.length > 0) loadFile(fileInput.files[0]); });
+
+  function loadFile(file) {
+    fileNameEl.textContent = file.name;
+    statusEl.textContent = 'Reading file...';
+    const reader = new FileReader();
+    reader.onload = () => {
+      fileBytes = new Uint8Array(reader.result);
+      analyzeBtn.disabled = false;
+      statusEl.textContent = `Loaded ${file.name} (${(file.size / 1024 / 1024).toFixed(1)} MB). Click Analyze.`;
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  // Analyze
+  analyzeBtn.addEventListener('click', () => {
+    if (!fileBytes) return;
+    analyzeBtn.disabled = true;
+    statusEl.textContent = 'Analyzing...';
+    resultsEl.classList.remove('visible');
+
+    // Use setTimeout to let the UI update before the blocking WASM call
+    setTimeout(() => {
+      try {
+        const sigma = parseFloat(sigmaSlider.value);
+        const debayerChecked = document.getElementById('debayer').checked;
+        const result = analyzeFITS(fileBytes, sigma, { debayer: debayerChecked });
+
+        if (result.error) {
+          statusEl.textContent = 'Error: ' + result.error;
+          analyzeBtn.disabled = false;
+          return;
+        }
+
+        displayResults(result);
+
+        // Render overlay
+        const overlay = renderOverlay();
+        if (overlay instanceof Uint8Array) {
+          const blob = new Blob([overlay], { type: 'image/jpeg' });
+          document.getElementById('overlayImg').src = URL.createObjectURL(blob);
+        }
+
+        statusEl.textContent = `Done. ${result.stars.length} stars detected.`;
+      } catch (e) {
+        statusEl.textContent = 'Error: ' + e.message;
+      }
+      analyzeBtn.disabled = false;
+    }, 50);
+  });
+
+  function displayResults(r) {
+    resultsEl.classList.add('visible');
+
+    // Summary cards
+    const summaryEl = document.getElementById('summary');
+    summaryEl.innerHTML = [
+      card('Stars', r.stars.length),
+      card('Median HFR', r.medianHFR.toFixed(3) + ' px'),
+      card('Mean HFR', r.meanHFR.toFixed(3) + ' px'),
+      card('StdDev HFR', r.stddevHFR.toFixed(3) + ' px'),
+      card('Median FWHM', r.medianFWHM.toFixed(3) + ' px'),
+      card('Median Ecc', r.medianEccentricity.toFixed(4)),
+      card('Background', r.background.toFixed(1)),
+      card('Noise (σ)', r.stddev.toFixed(1)),
+      card('Image', r.width + ' × ' + r.height),
+    ].join('');
+
+    // Zone grid — map zone labels to a 3x3 grid
+    const zoneGridEl = document.getElementById('zoneGrid');
+    if (r.field) {
+      const order = ['TL', 'T', 'TR', 'L', 'Center', 'R', 'BL', 'B', 'BR'];
+      const zoneMap = {};
+      r.field.zones.forEach(z => { zoneMap[z.label] = z; });
+      zoneGridEl.innerHTML = order.map(label => {
+        const z = zoneMap[label] || { medianHFR: 0, starCount: 0, medianFWHM: 0 };
+        return `<div class="zone-cell">
+          <div class="zone-label">${label}</div>
+          <div class="zone-hfr">${z.medianHFR.toFixed(3)}</div>
+          <div class="zone-detail">n=${z.starCount} FWHM=${z.medianFWHM.toFixed(2)}</div>
+        </div>`;
+      }).join('');
+
+      // Tilt info
+      const tiltEl = document.getElementById('tiltInfo');
+      let html = `<span>Tilt: <b>${r.field.tiltPct.toFixed(1)}%</b> (worst: ${r.field.worstCorner}, best: ${r.field.bestCorner})</span>`;
+      html += `<span>Off-axis: <b>${r.field.offAxisPct.toFixed(1)}%</b></span>`;
+      if (!r.field.reliable) html += `<span class="warn">Low star count — results may be unreliable</span>`;
+      tiltEl.innerHTML = html;
+    } else {
+      zoneGridEl.innerHTML = '<div style="color:#888">No field analysis (insufficient stars)</div>';
+      document.getElementById('tiltInfo').innerHTML = '';
+    }
+
+    // Star table
+    const tbody = document.getElementById('starBody');
+    tbody.innerHTML = r.stars.map((s, i) =>
+      `<tr><td>${i + 1}</td><td>${s.x.toFixed(2)}</td><td>${s.y.toFixed(2)}</td><td>${s.peak.toFixed(1)}</td><td>${s.flux.toFixed(1)}</td><td>${s.hfr.toFixed(3)}</td><td>${s.fwhm.toFixed(3)}</td><td>${s.roundness.toFixed(2)}</td><td>${s.eccentricity.toFixed(3)}</td></tr>`
+    ).join('');
+  }
+
+  function card(label, value) {
+    return `<div class="stat-card"><div class="label">${label}</div><div class="value">${value}</div></div>`;
+  }
+})();
+</script>
+</body>
+</html>
